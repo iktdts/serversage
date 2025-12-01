@@ -34,6 +34,22 @@ class VerificationBot(commands.Bot):
         """
         logger.info("Running setup_hook...")
 
+        # Initialize database connection
+        try:
+            from database import init_engine, create_tables
+            init_engine(self.settings.DATABASE_URL, echo=False)
+            await create_tables()
+            logger.info("Database initialized successfully.")
+
+            # Initialize database service
+            from services.database_service import DatabaseService
+            self.db_service = DatabaseService(bot=self, settings=self.settings)
+            logger.info("DatabaseService initialized.")
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {e}", exc_info=True)
+            logger.warning("Bot will continue without database functionality.")
+            self.db_service = None
+
         # Initialize HTTP client for LLM interactions
         timeout_seconds = getattr(self.settings, 'LLM_HTTP_TIMEOUT_SECONDS', 30)
         self.http_session = httpx.AsyncClient(timeout=timeout_seconds)
@@ -115,6 +131,14 @@ class VerificationBot(commands.Bot):
         The `async with bot:` context manager in `main.py` will call `bot.close()`,
         which handles some cleanup including closing the HTTP session if `self.http_session.is_closed` is false.
         """
+        # Close database connection
+        try:
+            from database import close_engine
+            await close_engine()
+            logger.info("Database connection closed.")
+        except Exception as e:
+            logger.error(f"Error closing database connection: {e}", exc_info=True)
+
         if self.http_session and not self.http_session.is_closed:
             await self.http_session.aclose()
             logger.info("HTTP session closed during shutdown.")

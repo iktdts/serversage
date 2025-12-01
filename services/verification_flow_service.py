@@ -27,7 +27,8 @@ class VerificationFlowService:
         self.bot = bot
         self.llm_client = llm_client
         self.settings = settings
-        self.active_verifications: Dict[int, Dict[str, Any]] = {} 
+        self.active_verifications: Dict[int, Dict[str, Any]] = {}
+        self.db_service = getattr(bot, "db_service", None) 
 
     def _get_member_current_manageable_roles_text(self, member: discord.Member) -> Tuple[str, List[int]]:
         """
@@ -114,8 +115,10 @@ class VerificationFlowService:
             return
 
         initial_dm_message = (
-            f"Hello {member.mention}! To begin your verification with **{member.guild.name}**, please tell me about your skills (e.g., Programming Languages, Experience Level, Operating Systems, etc.).\n\n"
-            f"¡Hola {member.mention}! Para comenzar tu verificación con **{member.guild.name}**, por favor cuéntame sobre tus habilidades (ej. Lenguajes de Programación, Nivel de Experiencia, Sistemas Operativos, etc.)."
+            f"🇪🇸 **Español:**\n"
+            f"¡Hola {member.mention}! Para comenzar tu verificación con **{member.guild.name}**, por favor cuéntame sobre tus habilidades (ej. Lenguajes de Programación, Nivel de Experiencia, Sistemas Operativos, etc.).\n\n"
+            f"🇺🇸 **English:**\n"
+            f"Hello {member.mention}! To begin your verification with **{member.guild.name}**, please tell me about your skills (e.g., Programming Languages, Experience Level, Operating Systems, etc.)."
         )
         
         dm_channel = None
@@ -138,14 +141,16 @@ class VerificationFlowService:
         except discord.Forbidden:
             logger.warning(f"SVC_START: Cannot send initial DM to {member.name}. User might have DMs disabled.")
             if interaction:
+                from utils.i18n import CommonMessages
                 # Add a followup message here as well for feedback
-                await interaction.followup.send(f"I couldn't send you a DM, {member.mention}. Please check if you have DMs enabled for this server.", ephemeral=True)
+                await interaction.followup.send(f"{member.mention}, {CommonMessages.DM_DISABLED}", ephemeral=True)
             await self._conclude_verification(member, success=False, reason="Failed to send DM (DMs possibly disabled).")
         except Exception as e:
             logger.error(f"SVC_START: Error starting/updating verification for {member.name}: {e}", exc_info=True)
             if interaction:
+                from utils.i18n import CommonMessages
                 # Add a followup message here for feedback on generic errors
-                await interaction.followup.send("An unexpected error occurred while trying to start your verification. Please contact an admin.", ephemeral=True)
+                await interaction.followup.send(CommonMessages.ERROR_GENERIC, ephemeral=True)
             await self._conclude_verification(member, success=False, reason="Internal error during verification initiation.")
 
     # ... (the rest of the file remains unchanged) ...
@@ -256,6 +261,18 @@ class VerificationFlowService:
                 if llm_guidance.get('unassignable_skills'):
                     for skill_info in llm_guidance['unassignable_skills']: 
                         await self.notify_admin_unmappable_skill(member, skill_info)
+                        # Save unmapped skill to database
+                        if self.db_service:
+                            try:
+                                await self.db_service.save_unmapped_skill(
+                                    user_id=member.id,
+                                    user_name=member.name,
+                                    skill_name=skill_info.get("skill", "Unknown"),
+                                    suggested_category=skill_info.get("category"),
+                                    source="verification",
+                                )
+                            except Exception as e:
+                                logger.error(f"Failed to save unmapped skill to database: {e}", exc_info=True)
 
                 if llm_guidance.get('user_has_confirmed') is True: 
                     logger.info(f"DM_HANDLER: LLM signaled confirmation for {member.name}.")
@@ -274,9 +291,9 @@ class VerificationFlowService:
                 user_state['retries_left'] -= 1
                 logger.info(f"DM_HANDLER: LLM did not signal final confirmation for {member.name}. Retries left: {user_state['retries_left']}")
             
-            except asyncio.TimeoutError: 
+            except asyncio.TimeoutError:
                 logger.info(f"DM_HANDLER: Verification DM timed out for {member.name}.")
-                await dm_channel.send("It looks like you've been inactive. Verification timed out. Use `/assign-roles` to restart.")
+                await dm_channel.send(CommonMessages.verification_timeout())
                 await self._conclude_verification(member, success=False, reason="User inactive in DM.")
                 return
             except discord.Forbidden:
@@ -459,6 +476,31 @@ class VerificationFlowService:
             if valid_roles_to_remove: logger.info(f"SVC_CONCLUDE: For {member.name}: Removed: {[r.name for r in valid_roles_to_remove]}.")
             if valid_roles_to_add: logger.info(f"SVC_CONCLUDE: For {member.name}: Added: {[r.name for r in valid_roles_to_add]}.")
             if not valid_roles_to_add and not valid_roles_to_remove: logger.info(f"SVC_CONCLUDE: No role changes actioned for {member.name}.")
+
+            # Save role assignments to database (only save skill roles, not system roles like verified/unverified)
+            if self.db_service and success and assigned_skill_roles:
+                try:
+                    skill_role_ids = [r.id for r in assigned_skill_roles if r]
+                    if skill_role_ids:
+                        result = await self.db_service.assign_roles_to_user(
+                            user_id=member.id,
+                            role_ids=skill_role_ids,
+                            assigned_by="verification",
+                            clear_existing=True,
+                        )
+                        logger.info(f"SVC_CONCLUDE: Saved {len(result['success'])} roles to database for {member.name}.")
+
+                        # Send notification if any roles failed
+                        if result['failed']:
+                            logger.warning(f"SVC_CONCLUDE: {len(result['failed'])} roles failed for {member.name}")
+                            await self.db_service._send_role_assignment_failure_notification(
+                                user_id=member.id,
+                                user_name=member.name,
+                                failed_role_ids=result['failed'],
+                                guild=guild
+                            )
+                except Exception as e:
+                    logger.error(f"SVC_CONCLUDE: Failed to save roles to database for {member.name}: {e}", exc_info=True)
 
             if final_dm_message_to_send:
                 try: await member.send(final_dm_message_to_send)

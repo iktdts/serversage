@@ -274,5 +274,86 @@ class AdminCommandsCog(commands.Cog, name="AdminCommands"):
             await interaction.followup.send("Error: Could not trigger role categorization. System component missing.", ephemeral=True)
 
 
+    @admin_group.command(name="sync-roles", description="Syncs all Discord roles to the database.")
+    @app_commands.check(check_admin_roles)
+    async def sync_roles(self, interaction: discord.Interaction):
+        """
+        Syncs all roles from Discord to the database.
+        This ensures that all roles exist in the database before they can be assigned.
+        """
+        logger.info(f"Admin command '/admin sync-roles' used by {interaction.user.name}")
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        if not interaction.guild:
+            await interaction.followup.send("This command can only be used in a server.", ephemeral=True)
+            return
+
+        db_service = getattr(self.bot, "db_service", None)
+        if not db_service:
+            await interaction.followup.send("Error: Database service is not available.", ephemeral=True)
+            return
+
+        try:
+            # Get all categorized roles
+            categorized_roles = getattr(self.bot, 'categorized_server_roles', {})
+            if not categorized_roles:
+                await interaction.followup.send("Warning: No categorized roles found. Please run `/admin rebuild-role-categories` first.", ephemeral=True)
+                return
+
+            # Build list of roles to sync
+            roles_to_sync = []
+            total_roles = 0
+            for category, role_ids in categorized_roles.items():
+                for role_id in role_ids:
+                    discord_role = interaction.guild.get_role(role_id)
+                    if discord_role:
+                        roles_to_sync.append({
+                            "role_id": discord_role.id,
+                            "role_name": discord_role.name,
+                            "category": category
+                        })
+                        total_roles += 1
+
+            if not roles_to_sync:
+                await interaction.followup.send("No roles found to sync.", ephemeral=True)
+                return
+
+            # Sync roles to database
+            await db_service.sync_multiple_roles(roles_to_sync)
+
+            # Send confirmation
+            summary = []
+            for category, role_ids in categorized_roles.items():
+                count = len(role_ids)
+                summary.append(f"**{category}**: {count} roles")
+
+            summary_text = "\n".join(summary)
+            await interaction.followup.send(
+                f"✅ Successfully synced **{total_roles}** roles to the database!\n\n{summary_text}",
+                ephemeral=True
+            )
+
+            # Also send notification to admin channel
+            notif_channel_id = getattr(self.settings, 'NOTIFICATION_CHANNEL_ID', None)
+            if notif_channel_id:
+                try:
+                    admin_channel = interaction.guild.get_channel(int(notif_channel_id))
+                    if admin_channel and isinstance(admin_channel, discord.TextChannel):
+                        embed = discord.Embed(
+                            title="✅ Roles Synced to Database",
+                            description=f"{interaction.user.mention} synced **{total_roles}** roles to the database.",
+                            color=discord.Color.green(),
+                            timestamp=discord.utils.utcnow()
+                        )
+                        embed.add_field(name="Summary", value=summary_text, inline=False)
+                        await admin_channel.send(embed=embed)
+                except Exception as e:
+                    logger.error(f"Failed to send sync notification to admin channel: {e}", exc_info=True)
+
+        except Exception as e:
+            logger.error(f"Error during sync-roles command: {e}", exc_info=True)
+            await interaction.followup.send(f"An error occurred while syncing roles: {e}", ephemeral=True)
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(AdminCommandsCog(bot))

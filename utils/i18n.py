@@ -1,0 +1,123 @@
+# File: utils/i18n.py
+"""
+Internationalization utilities for bilingual Spanish/English messages.
+"""
+
+from typing import Optional
+
+
+def bilingual(es: str, en: str, separator: str = "\n\n", flags: bool = True) -> str:
+    """
+    Create a bilingual message with Spanish first, then English.
+
+    Args:
+        es: Spanish text
+        en: English text
+        separator: Separator between languages (default: double newline)
+        flags: Whether to include flag emojis and language labels (default: True)
+
+    Returns:
+        Formatted bilingual message
+
+    Example:
+        >>> bilingual(
+        ...     es="¡Hola! Bienvenido al servidor.",
+        ...     en="Hello! Welcome to the server."
+        ... )
+        '🇪🇸 **Español:**\n¡Hola! Bienvenido al servidor.\n\n🇺🇸 **English:**\nHello! Welcome to the server.'
+    """
+    if flags:
+        return (
+            f"🇪🇸 **Español:**\n{es}{separator}"
+            f"🇺🇸 **English:**\n{en}"
+        )
+    else:
+        return f"{es}{separator}{en}"
+
+
+def bilingual_field(
+    es_name: str,
+    es_value: str,
+    en_name: str,
+    en_value: str,
+    inline: bool = False
+) -> list[dict]:
+    """
+    Create bilingual embed fields (Spanish first, then English).
+
+    Args:
+        es_name: Spanish field name
+        es_value: Spanish field value
+        en_name: English field name
+        en_value: English field value
+        inline: Whether fields should be inline
+
+    Returns:
+        List of two field dictionaries for Discord embed
+
+    Example:
+        >>> fields = bilingual_field(
+        ...     es_name="Descripción",
+        ...     es_value="Este es un ejemplo",
+        ...     en_name="Description",
+        ...     en_value="This is an example"
+        ... )
+    """
+    return [
+        {"name": f"🇪🇸 {es_name}", "value": es_value, "inline": inline},
+        {"name": f"🇺🇸 {en_name}", "value": en_value, "inline": inline}
+    ]
+
+
+# Common bilingual messages for reuse
+class CommonMessages:
+    """Common bilingual messages used throughout the bot."""
+
+    DM_DISABLED = bilingual(
+        es="No pude enviarte un mensaje directo. Por favor, verifica que tengas los mensajes directos habilitados para este servidor.",
+        en="I couldn't send you a DM. Please check if you have DMs enabled for this server."
+    )
+
+    VERIFICATION_STARTED = bilingual(
+        es="¡Te he enviado un mensaje directo para iniciar/actualizar tu verificación de roles!",
+        en="I've sent you a DM to start/update your role verification!",
+        flags=False
+    )
+
+    ERROR_GENERIC = bilingual(
+        es="Ocurrió un error inesperado. Por favor, contacta a un administrador.",
+        en="An unexpected error occurred. Please contact an administrator.",
+        flags=False
+    )
+
+    ROLES_UPDATED = bilingual(
+        es="Tus roles han sido actualizados exitosamente.",
+        en="Your roles were updated successfully.",
+        flags=False
+    )
+
+    @staticmethod
+    def verification_timeout() -> str:
+        """Message for when verification times out."""
+        return bilingual(
+            es="Parece que has estado inactivo. La verificación ha expirado. Usa `/assign-roles` para reiniciar.",
+            en="It looks like you've been inactive. Verification timed out. Use `/assign-roles` to restart."
+        )
+
+    @staticmethod
+    def bot_only() -> str:
+        """Message when command is used by a bot."""
+        return bilingual(
+            es="Los bots no pueden usar este comando.",
+            en="Bots cannot use this command.",
+            flags=False
+        )
+
+    @staticmethod
+    def server_only() -> str:
+        """Message when command must be used in a server."""
+        return bilingual(
+            es="Este comando solo puede usarse dentro de un servidor.",
+            en="This command can only be used within a server.",
+            flags=False
+        )

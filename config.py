@@ -36,10 +36,20 @@ class Settings(BaseSettings):
     # Discord Channel IDs
     NOTIFICATION_CHANNEL_ID: Optional[PositiveInt] = None
     WELCOME_CHANNEL_ID: Optional[PositiveInt] = None
+    UNMAPPED_SKILLS_CHANNEL_ID: Optional[PositiveInt] = None
+    
+    # Database Configuration
+    DATABASE_HOST: str = "localhost"
+    DATABASE_PORT: PositiveInt = 5432
+    DATABASE_NAME: str = "serversage"
+    DATABASE_USER: str = "serversage"
+    DATABASE_PASSWORD: Optional[str] = None
+    DATABASE_PASSWORD_FILE: Optional[str] = None
     
     # Bot Behavior Configuration
     VERIFICATION_RETRIES: PositiveInt = 3
     REBUILD_ROLE_CATEGORIES_ON_STARTUP: bool = False
+    ROLE_SYNC_INTERVAL_MINUTES: PositiveInt = 30  # Sync roles every 30 minutes
 
     # LLM tuning: max tokens to request for generation and how much conversation history to keep
     LLM_MAX_RESPONSE_TOKENS: PositiveInt = 3072
@@ -71,6 +81,11 @@ class Settings(BaseSettings):
 
     PARSED_ADMIN_ROLE_IDS: List[int] = []
 
+    @property
+    def DATABASE_URL(self) -> str:
+        """Construct the PostgreSQL database URL for async connections."""
+        return f"postgresql+asyncpg://{self.DATABASE_USER}:{self.DATABASE_PASSWORD}@{self.DATABASE_HOST}:{self.DATABASE_PORT}/{self.DATABASE_NAME}"
+
     @model_validator(mode='after')
     def load_secrets_from_files(self) -> 'Settings':
         """Load secrets from files if the corresponding _FILE env var is set."""
@@ -89,9 +104,20 @@ class Settings(BaseSettings):
                 config_logger.info("Loaded LLM_API_TOKEN from file.")
             except Exception as e:
                 config_logger.error(f"Could not read secret from {self.LLM_API_TOKEN_FILE}: {e}")
+        
+        if self.DATABASE_PASSWORD_FILE and os.path.exists(self.DATABASE_PASSWORD_FILE):
+            try:
+                with open(self.DATABASE_PASSWORD_FILE, 'r') as f:
+                    self.DATABASE_PASSWORD = f.read().strip()
+                config_logger.info("Loaded DATABASE_PASSWORD from file.")
+            except Exception as e:
+                config_logger.error(f"Could not read secret from {self.DATABASE_PASSWORD_FILE}: {e}")
 
         if not self.DISCORD_BOT_TOKEN:
             raise ValueError("DISCORD_BOT_TOKEN must be set via environment variable or file.")
+        
+        if not self.DATABASE_PASSWORD:
+            config_logger.warning("DATABASE_PASSWORD is not set. Database connection may fail.")
             
         return self
 

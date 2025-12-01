@@ -317,6 +317,11 @@ class VerifiedRoleSelectorView(discord.ui.View):
         for cat, ids in self.categorized_roles.items():
             live_category_map[cat] = [rid for rid in ids if guild.get_role(int(rid))]
 
+        # Collect all selected role IDs for database update
+        all_selected_role_ids = []
+        for cat_selected_ids in self.selections.values():
+            all_selected_role_ids.extend(cat_selected_ids)
+
         # For each category, remove all live roles in that category from the member, then add selected
         for cat, live_ids in live_category_map.items():
             # remove existing roles in that category
@@ -336,6 +341,30 @@ class VerifiedRoleSelectorView(discord.ui.View):
                         await member.add_roles(role, reason="User self-service role update")
                     except Exception:
                         failed_assign.append((cat, rid))
+
+        # Save to database if db_service is available
+        db_service = getattr(self.bot, "db_service", None)
+        if db_service and all_selected_role_ids:
+            try:
+                result = await db_service.assign_roles_to_user(
+                    user_id=member.id,
+                    role_ids=all_selected_role_ids,
+                    assigned_by="manual_assignment",
+                    clear_existing=True,
+                )
+                logger.info(f"Saved {len(result['success'])} role assignments to database for user {member.name} (ID: {member.id}).")
+
+                # Send notification if any roles failed
+                if result['failed']:
+                    logger.warning(f"{len(result['failed'])} roles failed for {member.name} during manual assignment")
+                    await db_service._send_role_assignment_failure_notification(
+                        user_id=member.id,
+                        user_name=member.name,
+                        failed_role_ids=result['failed'],
+                        guild=guild
+                    )
+            except Exception as e:
+                logger.error(f"Failed to save role assignments to database for user {member.id}: {e}", exc_info=True)
 
         # Notify the user and admins if necessary
         if failed_assign:

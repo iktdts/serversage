@@ -1,0 +1,90 @@
+# migrations/docker-compose.yml
+# Docker Compose file for running migration scripts
+services:
+  migrate_verified_users:
+    build:
+      context: ..
+      dockerfile: migrations/Dockerfile
+    container_name: serversage_migrate_users
+    
+    env_file:
+      - ../.env
+    
+    environment:
+      # Database connection (points to postgres service)
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=discord
+      - DATABASE_USER=discord
+      - DATABASE_PASSWORD_FILE=/run/secrets/db_password
+      
+      # Discord token
+      - DISCORD_BOT_TOKEN_FILE=/run/secrets/discord_bot_token
+    
+    secrets:
+      - discord_bot_token
+      - db_password
+    
+    networks:
+      - dbnet
+      - bot
+    
+    command: python migrations/migrate_verified_users_roles.py
+    
+    # Run once and exit
+    restart: "no"
+    
+    profiles:
+      - migrate-users
+
+  migrate_unmapped_skills:
+    build:
+      context: ..
+      dockerfile: migrations/Dockerfile
+    container_name: serversage_migrate_skills
+    
+    env_file:
+      - ../.env
+    
+    environment:
+      # Database connection
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=discord
+      - DATABASE_USER=discord
+      - DATABASE_PASSWORD_FILE=/run/secrets/db_password
+      
+      # Discord token
+      - DISCORD_BOT_TOKEN_FILE=/run/secrets/discord_bot_token
+    
+    secrets:
+      - discord_bot_token
+      - db_password
+    
+    networks:
+      - dbnet
+      - bot
+    
+    # Interactive mode - allocate TTY
+    stdin_open: true
+    tty: true
+    
+    command: python migrations/migrate_unmapped_skills.py
+    
+    # Run once and exit
+    restart: "no"
+    
+    profiles:
+      - migrate-skills
+
+networks:
+  dbnet:
+    external: true
+  bot:
+    external: true
+
+secrets:
+  discord_bot_token:
+    file: ../secrets/discord_token.txt
+  db_password:
+    file: ../secrets/db_password.txt
