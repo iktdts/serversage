@@ -164,6 +164,15 @@ class GeminiProvider(BaseLLMProvider):
         # Convert messages to Gemini format
         system_instruction, contents = self._convert_messages_to_gemini(messages)
 
+        # Gemini requires at least one content message
+        # If all messages were system messages, create a minimal user prompt
+        if not contents:
+            logger.debug("No user/assistant messages found, creating minimal user prompt for Gemini")
+            contents = [{
+                "role": "user",
+                "parts": [{"text": "Please respond based on the system instructions."}]
+            }]
+
         # Build Gemini request payload
         payload = {
             "contents": contents,
