@@ -21,10 +21,16 @@ class Settings(BaseSettings):
     DISCORD_BOT_TOKEN_FILE: Optional[str] = None
 
     # LLM API Configuration
-    LLM_API_URL: HttpUrl
+    LLM_PROVIDER: str = "openai"  # Options: 'openai', 'gemini'
+    LLM_API_KEY: Optional[str] = None
+    LLM_API_KEY_FILE: Optional[str] = None
+    LLM_MODEL_NAME: str = "gpt-4"  # OpenAI: 'gpt-4', 'gpt-3.5-turbo' | Gemini: 'gemini-1.5-pro', 'gemini-1.5-flash'
+    LLM_BASE_URL: Optional[str] = None  # Optional custom base URL for OpenAI-compatible APIs
+
+    # Legacy fields (kept for backward compatibility, will be removed in future)
+    LLM_API_URL: Optional[HttpUrl] = None
     LLM_API_TOKEN: Optional[str] = None
     LLM_API_TOKEN_FILE: Optional[str] = None
-    LLM_MODEL_NAME: str = "your-llm-model-name"
 
     # Discord Role IDs
     VERIFIED_ROLE_ID: PositiveInt
@@ -96,15 +102,33 @@ class Settings(BaseSettings):
                 config_logger.info("Loaded DISCORD_BOT_TOKEN from file.")
             except Exception as e:
                 config_logger.error(f"Could not read secret from {self.DISCORD_BOT_TOKEN_FILE}: {e}")
-        
+
+        # Load LLM_API_KEY from file (new provider-based approach)
+        if self.LLM_API_KEY_FILE and os.path.exists(self.LLM_API_KEY_FILE):
+            try:
+                with open(self.LLM_API_KEY_FILE, 'r') as f:
+                    self.LLM_API_KEY = f.read().strip()
+                config_logger.info("Loaded LLM_API_KEY from file.")
+            except Exception as e:
+                config_logger.error(f"Could not read secret from {self.LLM_API_KEY_FILE}: {e}")
+
+        # Legacy: Load LLM_API_TOKEN from file (backward compatibility)
         if self.LLM_API_TOKEN_FILE and os.path.exists(self.LLM_API_TOKEN_FILE):
             try:
                 with open(self.LLM_API_TOKEN_FILE, 'r') as f:
                     self.LLM_API_TOKEN = f.read().strip()
-                config_logger.info("Loaded LLM_API_TOKEN from file.")
+                config_logger.info("Loaded LLM_API_TOKEN from file (legacy).")
+                # If new API key not set, use legacy token
+                if not self.LLM_API_KEY:
+                    self.LLM_API_KEY = self.LLM_API_TOKEN
             except Exception as e:
                 config_logger.error(f"Could not read secret from {self.LLM_API_TOKEN_FILE}: {e}")
-        
+
+        # Backward compatibility: use legacy LLM_API_TOKEN if LLM_API_KEY not set
+        if not self.LLM_API_KEY and self.LLM_API_TOKEN:
+            self.LLM_API_KEY = self.LLM_API_TOKEN
+            config_logger.info("Using legacy LLM_API_TOKEN as LLM_API_KEY for backward compatibility.")
+
         if self.DATABASE_PASSWORD_FILE and os.path.exists(self.DATABASE_PASSWORD_FILE):
             try:
                 with open(self.DATABASE_PASSWORD_FILE, 'r') as f:
@@ -115,10 +139,18 @@ class Settings(BaseSettings):
 
         if not self.DISCORD_BOT_TOKEN:
             raise ValueError("DISCORD_BOT_TOKEN must be set via environment variable or file.")
-        
+
+        if not self.LLM_API_KEY:
+            config_logger.warning("LLM_API_KEY is not set. LLM functionality will not work.")
+            # Don't raise error to allow partial startup for debugging
+
         if not self.DATABASE_PASSWORD:
             config_logger.warning("DATABASE_PASSWORD is not set. Database connection may fail.")
-            
+
+        # Validate provider
+        if self.LLM_PROVIDER.lower() not in ['openai', 'gemini']:
+            raise ValueError(f"Invalid LLM_PROVIDER: {self.LLM_PROVIDER}. Must be 'openai' or 'gemini'.")
+
         return self
 
     @property

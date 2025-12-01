@@ -59,15 +59,15 @@ class VerificationBot(commands.Bot):
         # Ensure these imports are correct based on your project structure
         from llm_integration.llm_client import LLMClient # Moved import here
         self.llm_client = LLMClient(
-            api_url=str(self.settings.LLM_API_URL),
-            api_token=self.settings.LLM_API_TOKEN,
+            provider=self.settings.LLM_PROVIDER,
+            api_key=self.settings.LLM_API_KEY,
             model_name=self.settings.LLM_MODEL_NAME,
-            http_session=self.http_session, # Pass the created session
             user_verification_schema_path=self.settings.USER_VERIFICATION_SCHEMA_PATH,
             role_categorization_schema_path=self.settings.ROLE_CATEGORIZATION_SCHEMA_PATH,
-            request_timeout_seconds=getattr(self.settings, 'LLM_HTTP_TIMEOUT_SECONDS', None)
+            request_timeout_seconds=getattr(self.settings, 'LLM_HTTP_TIMEOUT_SECONDS', None),
+            base_url=self.settings.LLM_BASE_URL  # For OpenAI-compatible APIs
         )
-        logger.info("LLMClient initialized.")
+        logger.info(f"LLMClient initialized with provider='{self.settings.LLM_PROVIDER}' model='{self.settings.LLM_MODEL_NAME}'")
 
         from services.verification_flow_service import VerificationFlowService # Moved import here
         self.verification_service = VerificationFlowService(

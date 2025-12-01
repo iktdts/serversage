@@ -95,4 +95,14 @@ celerybeat-schedule
 
 .git
 .github
+
+# Secrets and sensitive files
 secrets/
+.secrets/
+*.key
+*.pem
+*.secret
+*.token
+*_secret.txt
+*_token.txt
+*_key.txt

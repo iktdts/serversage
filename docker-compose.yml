@@ -10,8 +10,11 @@ services:
     environment:
       # Point to the location of the secrets inside the container
       - DISCORD_BOT_TOKEN_FILE=/run/secrets/discord_bot_token
-      - LLM_API_TOKEN_FILE=/run/secrets/llm_api_token
+      - LLM_API_KEY_FILE=/run/secrets/llm_api_key
       - DATABASE_PASSWORD_FILE=/run/secrets/db_password
+
+      # Legacy support (will be removed in future versions)
+      - LLM_API_TOKEN_FILE=/run/secrets/llm_api_key
       
     volumes:
       # Mount the local ./data directory to /app/data in the container
@@ -28,7 +31,7 @@ services:
     
     secrets:
       - discord_bot_token
-      - llm_api_token
+      - llm_api_key
       - db_password
 
     networks:
@@ -48,7 +51,7 @@ networks:
 secrets:
   discord_bot_token:
     file: ./secrets/discord_token.txt # Path to your discord token secret on the host
-  llm_api_token:
-    file: ./secrets/llm_api_token.txt # Path to your llm api token secret on the host
+  llm_api_key:
+    file: ./secrets/llm_api_key.txt # Path to your LLM API key secret on the host (OpenAI/Gemini)
   db_password:
     file: ./secrets/db_password.txt # Path to your database password secret on the host
