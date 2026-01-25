@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     NOTIFICATION_CHANNEL_ID: Optional[PositiveInt] = None
     WELCOME_CHANNEL_ID: Optional[PositiveInt] = None
     UNMAPPED_SKILLS_CHANNEL_ID: Optional[PositiveInt] = None
+    LOBBY_CHANNEL_ID: Optional[PositiveInt] = None
     
     # Database Configuration
     DATABASE_HOST: str = "localhost"
@@ -58,7 +59,7 @@ class Settings(BaseSettings):
     ROLE_SYNC_INTERVAL_MINUTES: PositiveInt = 30  # Sync roles every 30 minutes
 
     # LLM tuning: max tokens to request for generation and how much conversation history to keep
-    LLM_MAX_RESPONSE_TOKENS: PositiveInt = 3072
+    LLM_MAX_RESPONSE_TOKENS: PositiveInt = 4096
     LLM_MAX_HISTORY_MESSAGES: PositiveInt = 8
     # HTTP timeout (seconds) for LLM API calls (can be increased for slower local LLMs)
     LLM_HTTP_TIMEOUT_SECONDS: PositiveInt = 120

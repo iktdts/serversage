@@ -6,6 +6,34 @@ Internationalization utilities for bilingual Spanish/English messages.
 from typing import Optional
 
 
+def locale_to_flag(locale: Optional[str]) -> str:
+    """Convert a locale like 'es-MX' or 'en-US' to a flag emoji; fallback smartly."""
+    if not locale:
+        return "🌐"
+
+    parts = locale.replace('_', '-').split('-')
+    language = parts[0].lower() if parts else ""
+    region = parts[1].upper() if len(parts) > 1 and parts[1] else ""
+
+    if region.isalpha() and len(region) == 2:
+        base = ord('🇦') - ord('A')
+        return chr(base + ord(region[0])) + chr(base + ord(region[1]))
+
+    # Fallback defaults by language if no region provided
+    default_flags = {
+        "es": "🇲🇽",  # default Spanish to Mexico for this bot audience
+        "en": "🇺🇸",
+        "fr": "🇫🇷",
+        "de": "🇩🇪",
+        "pt": "🇧🇷",
+        "it": "🇮🇹",
+        "ja": "🇯🇵",
+        "ko": "🇰🇷",
+        "zh": "🇨🇳",
+    }
+    return default_flags.get(language, "🌐")
+
+
 def bilingual(es: str, en: str, separator: str = "\n\n", flags: bool = True) -> str:
     """
     Create a bilingual message with Spanish first, then English.
@@ -24,11 +52,11 @@ def bilingual(es: str, en: str, separator: str = "\n\n", flags: bool = True) -> 
         ...     es="¡Hola! Bienvenido al servidor.",
         ...     en="Hello! Welcome to the server."
         ... )
-        '🇪🇸 **Español:**\n¡Hola! Bienvenido al servidor.\n\n🇺🇸 **English:**\nHello! Welcome to the server.'
+        '🇲🇽 **Español:**\n¡Hola! Bienvenido al servidor.\n\n🇺🇸 **English:**\nHello! Welcome to the server.'
     """
     if flags:
         return (
-            f"🇪🇸 **Español:**\n{es}{separator}"
+            f"🇲🇽 **Español:**\n{es}{separator}"
             f"🇺🇸 **English:**\n{en}"
         )
     else:
@@ -64,7 +92,7 @@ def bilingual_field(
         ... )
     """
     return [
-        {"name": f"🇪🇸 {es_name}", "value": es_value, "inline": inline},
+        {"name": f"🇲🇽 {es_name}", "value": es_value, "inline": inline},
         {"name": f"🇺🇸 {en_name}", "value": en_value, "inline": inline}
     ]
 

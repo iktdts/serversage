@@ -122,7 +122,7 @@ async def close_engine():
 
 
 # Re-export models for convenience
-from .models import Role, AssignedRole, RoleHistory, UnmappedSkill
+from .models import Role, AssignedRole, RoleHistory, UnmappedSkill, UserPreference
 
 __all__ = [
     "init_engine",
@@ -134,4 +134,5 @@ __all__ = [
     "AssignedRole",
     "RoleHistory",
     "UnmappedSkill",
+    "UserPreference",
 ]

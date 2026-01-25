@@ -86,10 +86,14 @@ class UserCommandsCog(commands.Cog, name="UserCommands"):
             # If we successfully deferred above, pass the interaction so the service can use followups.
             # If deferral failed, call without interaction so the service uses DMs only and avoids followup errors.
             try:
+                locale_raw = getattr(interaction, "locale", None)
+                locale = locale_raw.value if hasattr(locale_raw, "value") else (str(locale_raw) if locale_raw else None)
+                logger.debug(f"/assign-roles locale for {interaction.user.name}: {locale}")
+
                 if deferred_successfully:
-                    await self.verification_service.start_verification_process(interaction.user, interaction)
+                    await self.verification_service.start_verification_process(interaction.user, interaction, locale=locale)
                 else:
-                    await self.verification_service.start_verification_process(interaction.user, None)
+                    await self.verification_service.start_verification_process(interaction.user, None, locale=locale)
             except Exception as e:
                 logger.error(f"Error starting verification service from /assign-roles: {e}", exc_info=True)
         else:

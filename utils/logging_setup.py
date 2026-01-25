@@ -30,23 +30,7 @@ def setup_logging(log_level: str = "INFO", log_to_file: bool = False, log_dir: s
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
 
-    # File Handler (if enabled)
-    if log_to_file:
-        # Ensure the log directory exists
-        if not os.path.exists(log_dir):
-            try:
-                os.makedirs(log_dir)
-            except OSError as e:
-                logging.error(f"Could not create log directory {log_dir}: {e}. Logging to current directory instead.")
-                log_dir = "." # Fallback to current directory
-
-        full_log_path = os.path.join(log_dir, log_file_name)
-        
-        file_handler = RotatingFileHandler(
-            full_log_path, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8' # 10MB per file, 5 backups
-        )
-        file_handler.setFormatter(formatter) # Use the same formatter
-        root_logger.addHandler(file_handler)
+    # File Handler removed to keep logs on stdout (Docker-friendly)
 
     # Suppress overly verbose logs from specific third-party libraries
     # Set their log level to WARNING or ERROR to reduce noise

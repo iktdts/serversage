@@ -7,7 +7,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import get_session, Role, AssignedRole, RoleHistory, UnmappedSkill
+from database import get_session, Role, AssignedRole, RoleHistory, UnmappedSkill, UserPreference
 
 if TYPE_CHECKING:
     import discord
@@ -30,6 +30,45 @@ class DatabaseService:
         """
         self.bot = bot
         self.settings = settings
+
+        # Cache workflow/system role IDs that we purposely do not persist in the DB
+        self._system_role_ids_cache: Optional[Set[int]] = None
+
+    def _get_system_role_ids(self) -> Set[int]:
+        """Return role IDs that are managed by workflow and not persisted."""
+        if self._system_role_ids_cache is not None:
+            return self._system_role_ids_cache
+
+        role_ids: Set[int] = set()
+        if self.settings:
+            for attr in [
+                "VERIFIED_ROLE_ID",
+                "UNVERIFIED_ROLE_ID",
+                "VERIFICATION_IN_PROGRESS_ROLE_ID",
+                "SUSPICIOUS_ROLE_ID",
+            ]:
+                value = getattr(self.settings, attr, None)
+                if isinstance(value, int):
+                    role_ids.add(value)
+
+        self._system_role_ids_cache = role_ids
+        return role_ids
+
+    def _get_system_role_name(self, role_id: int) -> Optional[str]:
+        """Return a friendly name for known workflow roles."""
+        if not self.settings:
+            return None
+
+        mapping = {
+            getattr(self.settings, "VERIFIED_ROLE_ID", None): "verified",
+            getattr(self.settings, "UNVERIFIED_ROLE_ID", None): "unverified",
+            getattr(self.settings, "VERIFICATION_IN_PROGRESS_ROLE_ID", None): "verification_in_progress",
+            getattr(self.settings, "SUSPICIOUS_ROLE_ID", None): "suspicious",
+        }
+        name = mapping.get(role_id)
+        if name:
+            return f"{name} (workflow role)"
+        return None
 
     async def _send_role_assignment_failure_notification(
         self,
@@ -55,17 +94,22 @@ class DatabaseService:
             logger.warning("Bot instance not available. Cannot send role assignment failure notification.")
             return
 
+        channel = None
         try:
             import discord
 
             # Get the notification channel
+            target_channel_id = self.settings.NOTIFICATION_CHANNEL_ID
+
             if guild:
-                channel = guild.get_channel(self.settings.NOTIFICATION_CHANNEL_ID)
+                channel = guild.get_channel(target_channel_id)
             else:
-                channel = self.bot.get_channel(self.settings.NOTIFICATION_CHANNEL_ID)
+                channel = self.bot.get_channel(target_channel_id)
 
             if not channel or not isinstance(channel, discord.TextChannel):
-                logger.error(f"Invalid NOTIFICATION_CHANNEL_ID or channel not found: {self.settings.NOTIFICATION_CHANNEL_ID}")
+                logger.error(
+                    f"Invalid NOTIFICATION_CHANNEL_ID or channel not found: {target_channel_id}"
+                )
                 return
 
             # Build the message with role names
@@ -107,7 +151,17 @@ class DatabaseService:
             logger.info(f"Sent role assignment failure notification for user {user_id}")
 
         except Exception as e:
-            logger.error(f"Failed to send role assignment failure notification: {e}", exc_info=True)
+            channel_label = None
+            try:
+                channel_label = f"channel_id={channel.id} name={getattr(channel, 'name', 'unknown')}"
+            except Exception:
+                channel_label = f"channel_id={getattr(self.settings, 'NOTIFICATION_CHANNEL_ID', 'unknown')}"
+
+            guild_label = f"guild_id={getattr(guild, 'id', 'unknown')}"
+            logger.error(
+                f"Failed to send role assignment failure notification to {channel_label} ({guild_label}): {e}",
+                exc_info=True
+            )
 
     # ========== Role Management ==========
 
@@ -266,7 +320,14 @@ class DatabaseService:
 
             # Insert new role assignments - one at a time to handle partial failures
             if role_ids:
+                system_role_ids = self._get_system_role_ids()
                 for role_id in role_ids:
+                    if role_id in system_role_ids:
+                        role_name = self._get_system_role_name(role_id) or f"Role {role_id}"
+                        logger.debug(
+                            f"Skipping workflow/system role {role_id} ({role_name}) for user {user_id}; not persisted to database."
+                        )
+                        continue
                     try:
                         # Check if role exists in roles table
                         role = await session.get(Role, role_id)
@@ -325,6 +386,14 @@ class DatabaseService:
         """
         async with get_session() as session:
             try:
+                system_role_ids = self._get_system_role_ids()
+                if role_id in system_role_ids:
+                    role_name = self._get_system_role_name(role_id) or f"Role {role_id}"
+                    logger.debug(
+                        f"Skipping workflow/system role {role_id} ({role_name}) for user {user_id}; not persisted to database."
+                    )
+                    return True
+
                 # Check if already assigned
                 check_stmt = select(AssignedRole).where(
                     AssignedRole.user_id == user_id, AssignedRole.role_id == role_id
@@ -494,6 +563,10 @@ class DatabaseService:
             Role name or "Unknown Role (ID)" if not found
         """
         try:
+            system_role_name = self._get_system_role_name(role_id)
+            if system_role_name:
+                return system_role_name
+
             role = await session.get(Role, role_id)
             return role.role_name if role else f"Unknown Role ({role_id})"
         except Exception:
@@ -621,3 +694,31 @@ class DatabaseService:
             stmt = select(UnmappedSkill).order_by(UnmappedSkill.mentioned_at.desc())
             result = await session.execute(stmt)
             return list(result.scalars().all())
+
+    # ========== User Preferences ==========
+
+    async def upsert_user_locale(self, user_id: int, locale: Optional[str]) -> None:
+        """Store or update the user's preferred locale."""
+        async with get_session() as session:
+            stmt = insert(UserPreference).values(
+                user_id=user_id,
+                preferred_locale=locale,
+                updated_at=datetime.utcnow(),
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[UserPreference.user_id],
+                set_={
+                    "preferred_locale": locale,
+                    "updated_at": datetime.utcnow(),
+                },
+            )
+            await session.execute(stmt)
+            await session.commit()
+            logger.debug(f"Upserted locale '{locale}' for user {user_id}.")
+
+    async def get_user_locale(self, user_id: int) -> Optional[str]:
+        """Fetch stored preferred locale for a user."""
+        async with get_session() as session:
+            stmt = select(UserPreference.preferred_locale).where(UserPreference.user_id == user_id)
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()

@@ -5,12 +5,15 @@ import discord
 from discord.ext import commands
 import asyncio
 from typing import Optional, List, Dict, Any, TypedDict, Tuple
+from unicodedata import normalize
+
+from utils.i18n import CommonMessages, locale_to_flag
 
 # ... (TypedDict definitions remain the same) ...
 class LLMClassification(TypedDict, total=False):
-    Programming_Language: List[int]
-    Experience_Level: List[int]
-    Operating_System: List[int]
+    Programming_Language: List[str]
+    Experience_Level: List[str]
+    Operating_System: List[str]
 
 class LLMVerificationResponse(TypedDict):
     classification: Optional[LLMClassification]
@@ -29,6 +32,43 @@ class VerificationFlowService:
         self.settings = settings
         self.active_verifications: Dict[int, Dict[str, Any]] = {}
         self.db_service = getattr(bot, "db_service", None) 
+        self._role_name_to_id_cache: Dict[str, int] = {}
+
+    def _system_role_ids(self) -> List[int]:
+        """Role IDs managed by workflow (not suggested/assigned as skills)."""
+        ids: List[int] = []
+        for attr in [
+            "VERIFIED_ROLE_ID",
+            "UNVERIFIED_ROLE_ID",
+            "VERIFICATION_IN_PROGRESS_ROLE_ID",
+            "SUSPICIOUS_ROLE_ID",
+        ]:
+            val = getattr(self.settings, attr, None)
+            if isinstance(val, int):
+                ids.append(val)
+        return ids
+
+    def _build_role_name_lookup(self) -> None:
+        """Build lowercase name -> role_id map from server_roles_map for quick lookup."""
+        self._role_name_to_id_cache = {}
+        try:
+            for rid, name in getattr(self.bot, 'server_roles_map', {}).items():
+                if isinstance(name, str):
+                    self._role_name_to_id_cache[name.lower()] = rid
+        except Exception:
+            self._role_name_to_id_cache = {}
+
+    def _map_role_names_to_ids(self, role_names: List[str]) -> List[int]:
+        if not self._role_name_to_id_cache:
+            self._build_role_name_lookup()
+        mapped: List[int] = []
+        for name in role_names or []:
+            if not isinstance(name, str):
+                continue
+            rid = self._role_name_to_id_cache.get(name.lower())
+            if rid:
+                mapped.append(rid)
+        return mapped
 
     def _get_member_current_manageable_roles_text(self, member: discord.Member) -> Tuple[str, List[int]]:
         """
@@ -56,8 +96,24 @@ class VerificationFlowService:
         return f"I see you currently have the following roles related to skills/experience/OS: {', '.join(member_manageable_role_names)}.", member_manageable_role_ids
 
 
-    async def start_verification_process(self, member: discord.Member, interaction: Optional[discord.Interaction] = None):
-        logger.info(f"SVC_START: Attempting to start/update verification for: {member.name} (ID: {member.id})")
+    async def start_verification_process(self, member: discord.Member, interaction: Optional[discord.Interaction] = None, locale: Optional[str] = None):
+        logger.info(
+            f"SVC_START: Attempting to start/update verification for: {member.name} (ID: {member.id}) locale={locale}"
+        )
+
+        # Normalize locale (discord.Locale enums have .value)
+        if locale is not None and hasattr(locale, "value"):
+            locale = str(locale.value)
+
+        # If no locale passed, try to load stored preference
+        if not locale and self.db_service:
+            try:
+                stored_locale = await self.db_service.get_user_locale(member.id)
+                if stored_locale:
+                    locale = stored_locale
+                    logger.debug(f"SVC_START: Loaded stored locale {locale} for {member.name}")
+            except Exception as e:
+                logger.error(f"SVC_START: Failed to fetch stored locale for {member.name}: {e}")
 
         if member.bot:
             logger.info(f"SVC_START: Member {member.name} is a bot, skipping verification.")
@@ -94,7 +150,8 @@ class VerificationFlowService:
             'conversation_history': [], 
             'last_proposed_classification': None,
             'is_update_session': is_update_session,
-            'initial_manageable_role_ids': current_manageable_role_ids_for_user 
+            'initial_manageable_role_ids': current_manageable_role_ids_for_user,
+            'preferred_locale': locale
         }
         user_state = self.active_verifications[member.id]
 
@@ -114,12 +171,52 @@ class VerificationFlowService:
             self.active_verifications.pop(member.id, None)
             return
 
-        initial_dm_message = (
-            f"🇪🇸 **Español:**\n"
-            f"¡Hola {member.mention}! Para comenzar tu verificación con **{member.guild.name}**, por favor cuéntame sobre tus habilidades (ej. Lenguajes de Programación, Nivel de Experiencia, Sistemas Operativos, etc.).\n\n"
-            f"🇺🇸 **English:**\n"
-            f"Hello {member.mention}! To begin your verification with **{member.guild.name}**, please tell me about your skills (e.g., Programming Languages, Experience Level, Operating Systems, etc.)."
-        )
+        locale_lower = (locale or "").lower()
+        user_language = (locale_lower.split("-")[0] if locale_lower else "en") or "en"
+        logger.debug(f"SVC_START: Using preferred_language={user_language} for {member.name} (locale={locale})")
+        flag = locale_to_flag(locale)
+
+        initial_dm_message = None
+        # Try LLM-generated localized greeting first
+        if self.llm_client:
+            try:
+                initial_dm_message = await self.llm_client.generate_initial_verification_message(
+                    member_name=member.name,
+                    server_name=member.guild.name,
+                    preferred_locale=locale,
+                )
+            except Exception as e:
+                logger.error(f"SVC_START: Failed to generate initial DM via LLM for {member.name}: {e}")
+
+        # Fallback messages if LLM fails
+        if not initial_dm_message:
+            if user_language == "es":
+                initial_dm_message = (
+                    f"{flag} ¡Hola {member.mention}! Continuaremos en español. Cuéntame sobre tus habilidades (lenguajes, experiencia, sistemas operativos, herramientas)."
+                )
+            elif user_language == "en":
+                initial_dm_message = (
+                    f"{flag} Hello {member.mention}! I'll continue in English. Tell me about your skills (programming languages, experience level, operating systems, tools)."
+                )
+            else:
+                initial_dm_message = (
+                    f"{flag} I will continue in your preferred language ({user_language})."
+                    f" Please tell me about your skills (programming languages, experience level, operating systems, tools)."
+                    f" If this looks wrong, reply in your language and I'll follow it."
+                )
+
+        # Seed conversation with a system note so the LLM respects language preference
+        user_state['conversation_history'].append({
+            'role': 'system',
+            'content': f"[Preferred language: {user_language} (locale={locale or 'unknown'})]"
+        })
+
+        # Persist locale preference for future interactions
+        if self.db_service and locale:
+            try:
+                await self.db_service.upsert_user_locale(member.id, locale)
+            except Exception as e:
+                logger.error(f"SVC_START: Failed to persist locale {locale} for {member.name}: {e}")
         
         dm_channel = None
         try:
@@ -245,7 +342,8 @@ class VerificationFlowService:
                         categorized_server_roles=self.bot.categorized_server_roles,
                         available_roles_map=self.bot.server_roles_map,
                         verification_prompt_template=verification_prompt_template,
-                        max_response_tokens=getattr(self.settings, 'LLM_MAX_RESPONSE_TOKENS', None)
+                        max_response_tokens=getattr(self.settings, 'LLM_MAX_RESPONSE_TOKENS', None),
+                        preferred_locale=user_state.get('preferred_locale')
                     )
 
                 if not llm_guidance: 
@@ -281,7 +379,7 @@ class VerificationFlowService:
                     if current_classification: 
                         for cat_roles in current_classification.values(): 
                             if cat_roles and isinstance(cat_roles, list): 
-                                assigned_skill_role_ids.extend(cat_roles) 
+                                assigned_skill_role_ids.extend(self._map_role_names_to_ids(cat_roles)) 
                     
                     skill_roles_to_assign = [member.guild.get_role(rid) for rid in set(assigned_skill_role_ids) if isinstance(rid, int) and member.guild.get_role(rid) is not None]
                     
@@ -438,16 +536,6 @@ class VerificationFlowService:
                         max_response_tokens=getattr(self.settings, 'LLM_MAX_RESPONSE_TOKENS', None)
                     )
                     admin_notification_message = llm_summary if llm_summary else "LLM summary generation failed."
-                    # Fire-and-forget suspicious analysis: collect user messages and schedule async analysis
-                    try:
-                        suspicious_service = getattr(self.bot, 'suspicious_account_service', None)
-                        if suspicious_service:
-                            # collect user-only messages from the conversation history
-                            user_msgs = [m['content'] for m in conversation_history_for_summary if m.get('role') == 'user']
-                            # schedule background task so we don't block the conclude flow
-                            asyncio.create_task(suspicious_service.analyze_and_mark(member.guild, member, user_msgs, self.settings.PROMPT_PATH_SUSPICIOUS_ANALYSIS_SYSTEM_TEMPLATE if hasattr(self.settings, 'PROMPT_PATH_SUSPICIOUS_ANALYSIS_SYSTEM_TEMPLATE') else ""))
-                    except Exception as e:
-                        logger.error(f"Failed to schedule suspicious account analysis for {member.name}: {e}", exc_info=True)
                 else:
                     admin_notification_message = f"User successfully verified.\nAssigned roles: {', '.join(final_assigned_skill_role_names)}.\n(LLM summary prompt missing or LLM client error)"
             else:
@@ -461,8 +549,12 @@ class VerificationFlowService:
             else:
                 if unverified_role not in current_member_obj.roles: roles_to_add_final.append(unverified_role)
                 final_dm_message_to_send = (
+                    f"🇲🇽 **Español:**\n"
+                    f"No se pudo completar el proceso de verificación para **{guild.name}**. Motivo: {reason}\n"
+                    f"Se te asignó el estado 'unverified'. Intenta `/assign-roles` de nuevo o contacta a un admin.\n\n"
+                    f"🇺🇸 **English:**\n"
                     f"The verification process for **{guild.name}** could not be completed. Reason: {reason}\n"
-                    f"Assigned 'unverified' status. Try `/assign-roles` again or contact admin."
+                    f"You were assigned 'unverified'. Try `/assign-roles` again or contact an admin."
                 )
             admin_notification_title = f"❌ Verification Failed: {member.display_name}"
             admin_notification_message = f"{member.mention} could not complete verification.\nReason: {reason}\nStatus: Unverified"
@@ -509,8 +601,188 @@ class VerificationFlowService:
         except discord.HTTPException as e: logger.error(f"SVC_CONCLUDE: HTTP error managing roles for {member.name}: {e}")
         except Exception as e: logger.error(f"SVC_CONCLUDE: Unexpected error during role/DM updates for {member.name}: {e}", exc_info=True)
 
+        if success:
+            try:
+                asyncio.create_task(
+                    self._offer_additional_suggested_roles(
+                        member=member,
+                        conversation_history=conversation_history_for_summary,
+                        already_assigned_roles=assigned_skill_roles or [],
+                    )
+                )
+            except Exception as e:
+                logger.error(f"SVC_CONCLUDE: Failed to schedule additional role suggestion flow for {member.name}: {e}")
+
+            # Fire-and-forget suspicious analysis should run after suggestion prompt is queued
+            try:
+                suspicious_service = getattr(self.bot, 'suspicious_account_service', None)
+                if suspicious_service:
+                    user_msgs = [m['content'] for m in conversation_history_for_summary if m.get('role') == 'user']
+                    asyncio.create_task(
+                        suspicious_service.analyze_and_mark(
+                            member.guild,
+                            member,
+                            user_msgs,
+                            self.settings.PROMPT_PATH_SUSPICIOUS_ANALYSIS_SYSTEM_TEMPLATE if hasattr(self.settings, 'PROMPT_PATH_SUSPICIOUS_ANALYSIS_SYSTEM_TEMPLATE') else ""
+                        )
+                    )
+            except Exception as e:
+                logger.error(f"Failed to schedule suspicious account analysis for {member.name}: {e}", exc_info=True)
+
         if admin_notification_title and admin_notification_message:
             await self._send_admin_notification(guild, admin_notification_title, admin_notification_message, admin_notification_color)
+
+    async def _offer_additional_suggested_roles(
+        self,
+        member: discord.Member,
+        conversation_history: List[Dict[str, str]],
+        already_assigned_roles: List[discord.Role],
+    ) -> None:
+        """Ask user if they want approximate/related role suggestions and assign on consent."""
+
+        if not self.llm_client:
+            return
+
+        # Require categorized roles map
+        if not self.bot.categorized_server_roles or not self.bot.server_roles_map:
+            return
+
+        # Try to reuse stored locale if available
+        stored_locale = None
+        if self.db_service:
+            try:
+                stored_locale = await self.db_service.get_user_locale(member.id)
+            except Exception:
+                stored_locale = None
+
+        try:
+            dm = await member.create_dm()
+        except Exception:
+            logger.warning(f"SUGGEST_ROLES: Could not open DM with {member.name} for suggestions.")
+            return
+
+        # Compose conversation text for the LLM
+        convo_text_parts = []
+        for msg in conversation_history:
+            role = msg.get('role', 'user')
+            content = msg.get('content', '')
+            if content:
+                convo_text_parts.append(f"{role}: {content}")
+        convo_text = "\n".join(convo_text_parts)
+        max_chars = getattr(self.settings, 'LLM_SUMMARY_MAX_CHARS', 1800)
+        if len(convo_text) > max_chars:
+            convo_text = "...(truncated)...\n" + convo_text[-max_chars:]
+
+        # Limit candidates to manageable roles (categorized list) and exclude system/already-assigned
+        manageable_role_ids = set()
+        for cat_ids in self.bot.categorized_server_roles.values():
+            manageable_role_ids.update(cat_ids)
+
+        excluded_ids = set(self._system_role_ids())
+        excluded_ids.update([r.id for r in already_assigned_roles if r])
+        excluded_ids.update([r.id for r in member.roles])
+
+        filtered_roles_map = {
+            rid: name
+            for rid, name in self.bot.server_roles_map.items()
+            if rid in manageable_role_ids and rid not in excluded_ids
+        }
+
+        if not filtered_roles_map:
+            logger.debug(f"SUGGEST_ROLES: No manageable roles available for suggestions for {member.name}.")
+            return
+
+        suggestions = await self.llm_client.get_additional_role_suggestions(
+            conversation_text=convo_text,
+            available_roles_map=filtered_roles_map,
+            already_assigned_role_ids=list(excluded_ids),
+            max_suggestions=3,
+            max_response_tokens=getattr(self.settings, 'LLM_MAX_RESPONSE_TOKENS', None),
+            preferred_locale=stored_locale,
+        )
+
+        if not suggestions or not suggestions.get("suggested_role_ids"):
+            logger.info(f"SUGGEST_ROLES: LLM returned no additional roles for {member.name}.")
+            return
+
+        candidate_roles: List[discord.Role] = []
+        suggested_names = [n.lower() for n in suggestions.get("suggested_role_names", []) if isinstance(n, str)]
+        for rid, name in filtered_roles_map.items():
+            if isinstance(name, str) and name.lower() in suggested_names and rid not in excluded_ids:
+                role_obj = member.guild.get_role(rid)
+                if role_obj:
+                    candidate_roles.append(role_obj)
+
+        if not candidate_roles:
+            logger.info(f"SUGGEST_ROLES: Suggested role names not found in guild for {member.name}.")
+            return
+
+        # Build confirmation message from LLM text plus plain names
+        msg_md = suggestions.get("message_markdown") or "Tengo algunas sugerencias adicionales basadas en tu experiencia." 
+        bullet_lines = [f"- {r.name}" for r in candidate_roles]
+        final_message = msg_md.strip() + "\n\n" + "\n".join(bullet_lines)
+
+        try:
+            await dm.send(final_message)
+        except discord.Forbidden:
+            logger.warning(f"SUGGEST_ROLES: Cannot send suggestions DM to {member.name}.")
+            return
+
+        def _is_yes(text: str) -> bool:
+            if not text:
+                return False
+            lowered = normalize('NFKD', text.strip().lower()).encode('ascii', 'ignore').decode('ascii')
+            return lowered in {"yes", "y", "si", "s", "sure", "ok", "vale", "claro", "add", "agrega"}
+
+        try:
+            reply = await self.bot.wait_for(
+                'message',
+                timeout=180.0,
+                check=lambda m: m.author.id == member.id and m.channel.id == dm.id and m.content is not None,
+            )
+        except asyncio.TimeoutError:
+            logger.info(f"SUGGEST_ROLES: User {member.name} did not respond to suggestions.")
+            return
+        except Exception as e:
+            logger.error(f"SUGGEST_ROLES: Error waiting for response from {member.name}: {e}")
+            return
+
+        if not _is_yes(reply.content):
+            try:
+                await dm.send("Entendido, no agregaré roles adicionales / Got it, no extra roles added.")
+            except Exception:
+                pass
+            logger.info(f"SUGGEST_ROLES: {member.name} declined additional roles.")
+            return
+
+        roles_to_add = [r for r in candidate_roles if r not in member.roles]
+        if not roles_to_add:
+            await dm.send("Ya tienes todos esos roles asignados / You already have those roles assigned.")
+            return
+
+        try:
+            await member.add_roles(*roles_to_add, reason="LLM suggested additional roles")
+            if self.db_service:
+                for role in roles_to_add:
+                    try:
+                        await self.db_service.add_role_to_user(
+                            user_id=member.id,
+                            role_id=role.id,
+                            assigned_by="llm_suggestion",
+                        )
+                    except Exception as e:
+                        logger.error(f"SUGGEST_ROLES: Failed to persist role {role.id} for {member.name}: {e}")
+            await dm.send("Listo, agregué los roles adicionales / Done, added the suggested roles.")
+            logger.info(f"SUGGEST_ROLES: Added suggested roles to {member.name}: {[r.name for r in roles_to_add]}")
+        except discord.Forbidden:
+            await dm.send("No tengo permisos para agregar esos roles. Avísale a un admin." )
+            logger.error(f"SUGGEST_ROLES: Missing permissions to add suggested roles for {member.name}.")
+        except Exception as e:
+            logger.error(f"SUGGEST_ROLES: Failed to add suggested roles for {member.name}: {e}", exc_info=True)
+            try:
+                await dm.send("Ocurrió un error al agregar los roles. Intenta luego o contacta a un admin.")
+            except Exception:
+                pass
 
     async def notify_admin_unmappable_skill(self, member: discord.Member, skill_info: Dict[str, str]):
         if not self.settings.NOTIFICATION_CHANNEL_ID: return 

@@ -3,7 +3,7 @@ Eres un asistente que genera contenido para un embed de Discord de bienvenida en
 Genera contenido JSON para un embed de bienvenida para $member_name en $server_name. Debe incluir:
 
 1. "title": Un título breve y amistoso (máximo 50 caracteres)
-2. "description": Mensaje de bienvenida mencionando <@$member_id>, diciéndole que recibirá un DM para verificación y que opcionalmente puede usar `/assign-roles` (máximo 300 caracteres)
+2. "description": Mensaje de bienvenida mencionando <@$member_id> (máximo 300 caracteres)
 3. "color": Un color hex apropiado para bienvenida (ej: "#3498DB" para azul, "#2ECC71" para verde)
 
 Responde únicamente con un objeto JSON válido con esas tres propiedades. Mantén todo breve, amistoso y en español.

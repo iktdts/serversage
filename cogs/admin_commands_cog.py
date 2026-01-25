@@ -58,7 +58,7 @@ class AdminCommandsCog(commands.Cog, name="AdminCommands"):
 
         if self.verification_service:
             # The service will now use followup messages.
-            await self.verification_service.start_verification_process(member, interaction)
+            await self.verification_service.start_verification_process(member, interaction, locale=getattr(interaction, "locale", None))
         else:
             logger.error("Verification service not available for '/admin verify-user'.")
             # Use followup
@@ -117,7 +117,7 @@ class AdminCommandsCog(commands.Cog, name="AdminCommands"):
 
         for member_to_verify in actual_batch:
             try:
-                await self.verification_service.start_verification_process(member_to_verify)
+                await self.verification_service.start_verification_process(member_to_verify, None, locale=None)
                 processed_count += 1
                 await asyncio.sleep(1)
             except Exception as e:

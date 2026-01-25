@@ -10,37 +10,37 @@
         "properties": {
           "Programming_Language": {
             "type": "array",
-            "description": "A list of role IDs for programming languages.",
+            "description": "A list of role names for programming languages.",
             "items": {
-              "type": "integer"
+              "type": "string"
             }
           },
           "Experience_Level": {
             "type": "array",
-            "description": "A list of role IDs for experience levels.",
+            "description": "A list of role names for experience levels.",
             "items": {
-              "type": "integer"
+              "type": "string"
             }
           },
           "Operating_System": {
             "type": "array",
-            "description": "A list of role IDs for operating systems.",
+            "description": "A list of role names for operating systems.",
             "items": {
-              "type": "integer"
+              "type": "string"
             }
           },
           "Tool": {
             "type": "array",
-            "description": "A list of role IDs for tools.",
+            "description": "A list of role names for tools.",
             "items": {
-              "type": "integer"
+              "type": "string"
             }
           },
           "Framework": {
             "type": "array",
-            "description": "A list of role IDs for frameworks.",
+            "description": "A list of role names for frameworks.",
             "items": {
-              "type": "integer"
+              "type": "string"
             }
           }
         },

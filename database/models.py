@@ -114,3 +114,15 @@ class UnmappedSkill(Base):
 
     def __repr__(self) -> str:
         return f"<UnmappedSkill(user_id={self.user_id}, skill_name='{self.skill_name}', suggested_category='{self.suggested_category}')>"
+
+
+class UserPreference(Base):
+    """Stores per-user preferences such as locale."""
+    __tablename__ = "user_preferences"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    preferred_locale: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    def __repr__(self) -> str:
+        return f"<UserPreference(user_id={self.user_id}, preferred_locale='{self.preferred_locale}')>"

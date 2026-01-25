@@ -97,9 +97,9 @@ class LLMClient:
 
         # Configuration from environment
         try:
-            self.default_max_tokens = int(os.getenv('DEFAULT_MAX_TOKENS', '4096'))
+            self.default_max_tokens = int(os.getenv('DEFAULT_MAX_TOKENS', '6144'))
         except Exception:
-            self.default_max_tokens = 4096
+            self.default_max_tokens = 6144
 
         try:
             self.welcome_temperature = float(os.getenv('WELCOME_TEMPERATURE', '0.7'))
@@ -438,7 +438,8 @@ class LLMClient:
         categorized_server_roles: Dict[str, List[int]],
         available_roles_map: Dict[int, str],
         verification_prompt_template: str,
-        max_response_tokens: Optional[int] = None
+        max_response_tokens: Optional[int] = None,
+        preferred_locale: Optional[str] = None,
     ) -> Optional[LLMVerificationResponse]:
         """
         Get LLM guidance for user verification.
@@ -448,11 +449,11 @@ class LLMClient:
         """
         logger.info(f"Getting verification guidance from LLM for user message: '{user_message}'")
 
-        # Build available roles text
+        # Build available roles text (names only to reduce tokens)
         available_roles_text_parts = []
         for category, role_ids in categorized_server_roles.items():
             role_names_in_category = [
-                f"'{available_roles_map.get(rid, str(rid))}' (ID: {rid})"
+                f"'{available_roles_map.get(rid, str(rid))}'"
                 for rid in role_ids if rid in available_roles_map
             ]
             if role_names_in_category:
@@ -461,12 +462,15 @@ class LLMClient:
         available_roles_text_list = "\n".join(available_roles_text_parts)
         if not available_roles_text_list:
             available_roles_text_list = "No specific skill/experience/OS roles are currently defined for classification."
+        # Cap available roles text to keep prompt small
+        available_roles_text_list = self._smart_trim(available_roles_text_list, 4000)
 
         # Format system prompt
         try:
             template = Template(verification_prompt_template)
-            system_prompt_content = template.substitute(
-                available_roles_text_list=available_roles_text_list
+            system_prompt_content = template.safe_substitute(
+                available_roles_text_list=available_roles_text_list,
+                preferred_locale=preferred_locale or "unspecified"
             )
         except KeyError as e:
             logger.error(f"KeyError during template substitution: {e.args[0]}", exc_info=True)
@@ -488,17 +492,26 @@ class LLMClient:
             }
 
         messages = [{"role": "system", "content": system_prompt_content}]
-        messages.extend(conversation_history)
-        messages.append({"role": "user", "content": user_message})
+        # Trim history content to avoid large prompts
+        for msg in conversation_history:
+            messages.append({
+                "role": msg.get("role", "user"),
+                "content": self._trim_message(msg.get("content", ""), 1200)
+            })
+
+        messages.append({"role": "user", "content": self._trim_message(user_message, 1200)})
 
         if not self.user_verification_schema:
             logger.error("User verification schema not loaded. Aborting guidance.")
             return None
 
+        # Use the higher of configured max_response_tokens and default_max_tokens to reduce truncation risk
+        effective_max_tokens = max(max_response_tokens or 0, self.default_max_tokens)
+
         llm_response_data = await self._make_llm_request(
             messages,
             temperature=0.3,
-            max_tokens=(max_response_tokens or self.default_max_tokens),
+            max_tokens=effective_max_tokens,
             functions=[self.user_verification_schema],
             function_call={"name": "propose_user_roles"}
         )
@@ -521,24 +534,19 @@ class LLMClient:
                     if all(key in parsed_response for key in ["message_to_user", "is_complete"]) and \
                        isinstance(parsed_response.get("user_has_confirmed"), bool):
 
-                        # Validate classification
+                        # Validate classification (names, not IDs)
                         if "classification" in parsed_response and parsed_response["classification"] is not None:
                             if not isinstance(parsed_response["classification"], dict):
                                 logger.error("LLM 'classification' field is not a dictionary.")
                                 parsed_response["classification"] = None
                             else:
-                                # Ensure all category values are lists of ints
                                 for category_key in list(parsed_response["classification"].keys()):
                                     if isinstance(parsed_response["classification"][category_key], list):
-                                        try:
-                                            valid_ids = [
-                                                int(rid) for rid in parsed_response["classification"][category_key]
-                                                if rid is not None
-                                            ]
-                                            parsed_response["classification"][category_key] = valid_ids
-                                        except (ValueError, TypeError):
-                                            logger.error(f"LLM returned non-integer role ID in {category_key}.")
-                                            parsed_response["classification"][category_key] = []
+                                        valid_names = []
+                                        for name in parsed_response["classification"][category_key]:
+                                            if isinstance(name, str) and name.strip():
+                                                valid_names.append(name.strip())
+                                        parsed_response["classification"][category_key] = valid_names
                                     else:
                                         logger.error(f"LLM 'classification' for {category_key} is not a list.")
                                         parsed_response["classification"][category_key] = []
@@ -564,6 +572,91 @@ class LLMClient:
             "unassignable_skills": None
         }
         return fallback_response
+
+    async def get_additional_role_suggestions(
+        self,
+        conversation_text: str,
+        available_roles_map: Dict[int, str],
+        already_assigned_role_ids: List[int],
+        max_suggestions: int = 3,
+        max_response_tokens: Optional[int] = None,
+        preferred_locale: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Suggest nearby/related roles (Markdown message + role names)."""
+
+        # Build list of candidate roles (exclude already assigned)
+        candidate_roles = {
+            rid: name for rid, name in available_roles_map.items() if rid not in set(already_assigned_role_ids or [])
+        }
+        if not candidate_roles:
+            logger.debug("No candidate roles available for additional suggestions.")
+            return None
+
+        roles_text = "\n".join([f"- {name}" for _, name in candidate_roles.items()])
+
+        trimmed_conversation = self._smart_trim(conversation_text or "", 1800)
+
+        system_prompt = (
+            "You are assisting with role assignment follow-up.\n"
+            "You will propose up to {max_suggestions} additional Discord roles that might fit the user based on conversation context.\n"
+            "Rules:\n"
+            "- Only choose role IDs from the provided list (and ONLY those).\n"
+            "- Prefer close or related matches (e.g., suggest 'Virtualization' for 'Proxmox').\n"
+            "- Do NOT include roles already assigned (IDs provided).\n"
+            "- If nothing fits, return an empty list.\n"
+            "- Respond in the user's preferred locale if provided; otherwise match conversation language, fallback to Spanish (Mexico).\n"
+            "- The response MUST be JSON with keys: message_markdown (string) and suggested_role_names (array of strings).\n"
+            "- message_markdown: short intro + a brief confirmation line telling the user to confirm if they want these roles; do not include IDs.\n"
+            "Available roles (names only):\n{roles_text}\n"
+            "Already assigned role IDs: {assigned_ids}\n"
+        ).format(max_suggestions=max_suggestions, roles_text=roles_text, assigned_ids=list(already_assigned_role_ids or []))
+
+        user_prompt = (
+            "Conversation summary/context to base suggestions on:\n" + (trimmed_conversation or "(no conversation text)") +
+            (f"\nPreferred locale: {preferred_locale}" if preferred_locale else "")
+        )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        llm_response = await self._make_llm_request(
+            messages,
+            temperature=0.4,
+            max_tokens=(max_response_tokens or self.default_max_tokens),
+        )
+
+        if not llm_response:
+            return None
+
+        try:
+            content = self._extract_content(llm_response)
+            parsed = None
+            if isinstance(content, str):
+                stripped = self._strip_code_fences(content)
+                try:
+                    parsed = json.loads(stripped)
+                except json.JSONDecodeError:
+                    logger.debug("Could not parse additional-role suggestions as JSON.")
+
+            if not isinstance(parsed, dict):
+                return None
+
+            message_md = parsed.get("message_markdown") or parsed.get("message")
+            suggested_names_raw = parsed.get("suggested_role_names") or parsed.get("suggested_roles") or []
+            suggested_names: List[str] = []
+            for nm in suggested_names_raw:
+                if isinstance(nm, str) and nm.strip():
+                    suggested_names.append(nm.strip())
+
+            return {
+                "message_markdown": message_md,
+                "suggested_role_names": list(dict.fromkeys(suggested_names)),  # dedupe, preserve order
+            }
+        except Exception as e:
+            logger.error(f"Error parsing additional role suggestions: {e}", exc_info=True)
+            return None
 
     async def generate_welcome_message(
         self,
@@ -604,8 +697,7 @@ class LLMClient:
             f"Un nuevo usuario llamado '{member_name}' (ID: {member_id}) se ha unido al servidor. "
             f"Genera contenido para un embed de Discord de bienvenida:\n"
             f"1. title: Un título breve y amistoso (máximo 50 caracteres)\n"
-            f"2. description: Mensaje de bienvenida mencionando EXACTAMENTE <@{member_id}> "
-            f"e incluyendo instrucción para ejecutar `/assign-roles` (máximo 300 caracteres)\n"
+            f"2. description: Mensaje de bienvenida mencionando EXACTAMENTE <@{member_id}> (máximo 300 caracteres)\n"
             f"3. color: Un color hex apropiado (ej: #3498DB)\n"
             f"Responde en español con un objeto JSON válido."
         ).format(member_id=member_id)
@@ -675,6 +767,46 @@ class LLMClient:
         logger.warning("Failed to generate LLM welcome embed, using fallback.")
         return fallback_embed
 
+    async def generate_initial_verification_message(
+        self,
+        member_name: str,
+        server_name: str,
+        preferred_locale: Optional[str] = None,
+    ) -> Optional[str]:
+        """Generate a short, localized greeting to start DM verification."""
+        try:
+            locale_hint = preferred_locale or ""
+            system_prompt = (
+                "You are a friendly Discord bot helping with role verification. "
+                "Greet the user briefly and ask them to describe their skills (programming languages, experience, operating systems, tools). "
+                "Respond in the user's preferred locale if provided; otherwise match the language in your reply to the user name. "
+                "Keep it concise (<= 80 words)."
+            )
+
+            user_prompt = (
+                f"User: {member_name} on server {server_name}. Preferred locale: {locale_hint}."
+            )
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+
+            llm_response_data = await self._make_llm_request(
+                messages,
+                temperature=0.4,
+                max_tokens=320,
+            )
+
+            if llm_response_data:
+                content = self._extract_content(llm_response_data)
+                if isinstance(content, str):
+                    return content.strip()
+        except Exception as e:
+            logger.error(f"Error generating initial verification message: {e}", exc_info=True)
+
+        return None
+
     def _smart_trim(self, text: str, max_chars: int) -> str:
         """Smart trim: keep head and tail to preserve context."""
         if not text or len(text) <= max_chars:
@@ -693,6 +825,22 @@ class LLMClient:
 
         return head + marker + tail
 
+    def _trim_message(self, content: Any, max_chars: int = 1200) -> Any:
+        """Trim message content to avoid oversized prompts."""
+        if isinstance(content, str) and len(content) > max_chars:
+            return self._smart_trim(content, max_chars)
+        return content
+
+    def _strip_code_fences(self, text: str) -> str:
+        """Remove Markdown code fences from a string if present."""
+        if not isinstance(text, str):
+            return text
+
+        fenced = re.match(r"^```(?:[a-zA-Z0-9]+)?\n(.*)\n```$", text.strip(), re.DOTALL)
+        if fenced:
+            return fenced.group(1).strip()
+        return text.strip()
+
     def _parse_welcome_response(
         self,
         response_data: Dict[str, Any],
@@ -704,7 +852,7 @@ class LLMClient:
             response_content_str = self._extract_content(response_data)
 
             if response_content_str and isinstance(response_content_str, str):
-                stripped = response_content_str.strip()
+                stripped = self._strip_code_fences(response_content_str)
 
                 # Try parsing as JSON
                 try:

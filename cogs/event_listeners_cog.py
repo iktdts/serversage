@@ -251,23 +251,27 @@ class EventListenersCog(commands.Cog, name="EventListeners"):
             
         logger.info(f"New member joined: {member.name} (ID: {member.id}) in guild {member.guild.name}")
 
-        # 1. Start verification process via DM
-        if self.verification_service:
-            # Ensure role data is available before starting verification
-            if not self.bot.categorized_server_roles or not self.bot.server_roles_map:
-                logger.warning(f"Role categorization data not yet available. Verification for {member.name} might be impacted.")
-                # Optionally, try to trigger a quick categorization if it failed on_ready for some reason
-                # await self.perform_role_categorization(member.guild, force_rebuild=True)
-                # Or, queue the member for verification once roles are ready.
-                # For now, we'll proceed, and the verification flow should handle missing role data gracefully.
-
-            # Start the verification flow in the background so we don't block sending the welcome message
-            try:
-                asyncio.create_task(self.verification_service.start_verification_process(member))
-            except Exception as e:
-                logger.error(f"Failed to start verification process in background for {member.name}: {e}", exc_info=True)
-        else:
+        # Verification now starts only when the user runs /assign-roles; no automatic DM on join.
+        if not self.verification_service:
             logger.error("VerificationFlowService not available in EventListenersCog for on_member_join.")
+
+        # Send a short lobby message (bilingual) instructing to use /assign-roles, if configured
+        lobby_channel_id = getattr(self.settings, 'LOBBY_CHANNEL_ID', None)
+        if lobby_channel_id:
+            lobby_channel = member.guild.get_channel(lobby_channel_id)
+            if lobby_channel and isinstance(lobby_channel, discord.TextChannel):
+                lobby_message = (
+                    "🇲🇽 Usa `/assign-roles` para iniciar tu verificación y recibir roles.\n"
+                    "🇺🇸 Use `/assign-roles` to start verification and receive roles."
+                )
+                try:
+                    await lobby_channel.send(lobby_message)
+                except discord.Forbidden:
+                    logger.warning(f"Cannot send lobby message to channel {lobby_channel.id} ({lobby_channel.name}).")
+                except Exception as e:
+                    logger.error(f"Failed to send lobby message: {e}", exc_info=True)
+            else:
+                logger.warning(f"Lobby channel ID {lobby_channel_id} not found or not a text channel.")
 
         # 2. Send LLM-generated welcome message to a channel as an embed
         if self.settings.WELCOME_CHANNEL_ID and self.llm_client:
