@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     WELCOME_CHANNEL_ID: Optional[PositiveInt] = None
     UNMAPPED_SKILLS_CHANNEL_ID: Optional[PositiveInt] = None
     LOBBY_CHANNEL_ID: Optional[PositiveInt] = None
+    VERIFICATION_CHANNEL_ID: Optional[PositiveInt] = None
     
     # Database Configuration
     DATABASE_HOST: str = "localhost"

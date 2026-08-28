@@ -124,6 +124,31 @@ class CommonMessages:
         flags=False
     )
 
+    VERIFY_BUTTON_DM_SENT = bilingual(
+        es=(
+            "Te hemos enviado un mensaje directo para comenzar tu verificacion. "
+            "Haz clic en el boton de abajo para ir directamente a la conversacion."
+        ),
+        en=(
+            "We have sent you a direct message to begin your verification. "
+            "Click the button below to navigate directly to the conversation."
+        ),
+    )
+
+    VERIFY_BUTTON_DM_DISABLED = bilingual(
+        es=(
+            "No fue posible enviarte un mensaje directo. Tu verificacion no pudo completarse "
+            "porque los mensajes directos estan desactivados en tu cuenta. "
+            "Por favor, habilita los mensajes directos para este servidor en tu configuracion "
+            "de privacidad y vuelve a intentarlo."
+        ),
+        en=(
+            "We were unable to send you a direct message. Your verification could not be "
+            "completed because direct messages are disabled on your account. "
+            "Please enable direct messages for this server in your privacy settings and try again."
+        ),
+    )
+
     @staticmethod
     def verification_timeout() -> str:
         """Message for when verification times out."""

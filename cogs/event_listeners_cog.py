@@ -251,29 +251,11 @@ class EventListenersCog(commands.Cog, name="EventListeners"):
             
         logger.info(f"New member joined: {member.name} (ID: {member.id}) in guild {member.guild.name}")
 
-        # Verification now starts only when the user runs /assign-roles; no automatic DM on join.
+        # Verification is initiated when the user clicks the button in the verification channel.
         if not self.verification_service:
             logger.error("VerificationFlowService not available in EventListenersCog for on_member_join.")
 
-        # Send a short lobby message (bilingual) instructing to use /assign-roles, if configured
-        lobby_channel_id = getattr(self.settings, 'LOBBY_CHANNEL_ID', None)
-        if lobby_channel_id:
-            lobby_channel = member.guild.get_channel(lobby_channel_id)
-            if lobby_channel and isinstance(lobby_channel, discord.TextChannel):
-                lobby_message = (
-                    "🇲🇽 Usa `/assign-roles` para iniciar tu verificación y recibir roles.\n"
-                    "🇺🇸 Use `/assign-roles` to start verification and receive roles."
-                )
-                try:
-                    await lobby_channel.send(lobby_message)
-                except discord.Forbidden:
-                    logger.warning(f"Cannot send lobby message to channel {lobby_channel.id} ({lobby_channel.name}).")
-                except Exception as e:
-                    logger.error(f"Failed to send lobby message: {e}", exc_info=True)
-            else:
-                logger.warning(f"Lobby channel ID {lobby_channel_id} not found or not a text channel.")
-
-        # 2. Send LLM-generated welcome message to a channel as an embed
+        # Send LLM-generated welcome message to a channel as an embed
         if self.settings.WELCOME_CHANNEL_ID and self.llm_client:
             welcome_channel = member.guild.get_channel(self.settings.WELCOME_CHANNEL_ID)
             if welcome_channel and isinstance(welcome_channel, discord.TextChannel):

@@ -274,6 +274,43 @@ class AdminCommandsCog(commands.Cog, name="AdminCommands"):
             await interaction.followup.send("Error: Could not trigger role categorization. System component missing.", ephemeral=True)
 
 
+    @admin_group.command(name="setup-verification-embed", description="Posts (or reposts) the permanent verification embed in the configured verification channel.")
+    @app_commands.check(check_admin_roles)
+    async def setup_verification_embed(self, interaction: discord.Interaction):
+        logger.info(f"Admin command '/admin setup-verification-embed' used by {interaction.user.name}")
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        if not interaction.guild:
+            await interaction.followup.send("This command can only be used in a server.", ephemeral=True)
+            return
+
+        channel_id = getattr(self.settings, "VERIFICATION_CHANNEL_ID", None)
+        if not channel_id:
+            await interaction.followup.send(
+                "VERIFICATION_CHANNEL_ID is not configured. Set it in your `.env` file and restart the bot.",
+                ephemeral=True,
+            )
+            return
+
+        embed_cog = self.bot.get_cog("VerificationEmbed")
+        if not embed_cog:
+            await interaction.followup.send(
+                "Error: VerificationEmbedCog is not loaded.",
+                ephemeral=True,
+            )
+            return
+
+        # Force a fresh post by clearing the stored message ID
+        embed_cog._embed_message_id = None
+        await embed_cog.ensure_verification_embed(interaction.guild)
+
+        channel = interaction.guild.get_channel(channel_id)
+        channel_mention = channel.mention if channel else f"<#{channel_id}>"
+        await interaction.followup.send(
+            f"Verification embed has been posted in {channel_mention}.",
+            ephemeral=True,
+        )
+
     @admin_group.command(name="sync-roles", description="Syncs all Discord roles to the database.")
     @app_commands.check(check_admin_roles)
     async def sync_roles(self, interaction: discord.Interaction):

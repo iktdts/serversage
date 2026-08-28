@@ -222,33 +222,28 @@ class VerificationFlowService:
         try:
             dm_channel = await member.create_dm()
             await dm_channel.send(initial_dm_message)
-            user_state['conversation_history'].append({'role': 'assistant', 'content': initial_dm_message}) 
-            
-            # --- MODIFICATION START ---
-            # Use followup.send() instead of response.send_message()
+            user_state['conversation_history'].append({'role': 'assistant', 'content': initial_dm_message})
+
             if interaction:
                 await interaction.followup.send(f"I've sent you a DM to start/update your role verification, {member.mention}!", ephemeral=True)
-            # --- MODIFICATION END ---
-            
-            if dm_channel:
-                await self._handle_dm_conversation(member, dm_channel)
-            else:
-                logger.error(f"SVC_START: DM channel is None for {member.name}.")
-                await self._conclude_verification(member, success=False, reason="Failed to establish DM channel.")
+
+            # Run the DM conversation loop as a background task so callers return immediately
+            asyncio.ensure_future(self._handle_dm_conversation(member, dm_channel))
+            return True
         except discord.Forbidden:
             logger.warning(f"SVC_START: Cannot send initial DM to {member.name}. User might have DMs disabled.")
             if interaction:
                 from utils.i18n import CommonMessages
-                # Add a followup message here as well for feedback
                 await interaction.followup.send(f"{member.mention}, {CommonMessages.DM_DISABLED}", ephemeral=True)
             await self._conclude_verification(member, success=False, reason="Failed to send DM (DMs possibly disabled).")
+            return False
         except Exception as e:
             logger.error(f"SVC_START: Error starting/updating verification for {member.name}: {e}", exc_info=True)
             if interaction:
                 from utils.i18n import CommonMessages
-                # Add a followup message here for feedback on generic errors
                 await interaction.followup.send(CommonMessages.ERROR_GENERIC, ephemeral=True)
             await self._conclude_verification(member, success=False, reason="Internal error during verification initiation.")
+            return False
 
     # ... (the rest of the file remains unchanged) ...
     async def _handle_dm_conversation(self, member: discord.Member, dm_channel: discord.DMChannel):
