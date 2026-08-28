@@ -40,7 +40,9 @@ ENV/
 # Environment variables
 .env
 .env.*
-!.env.example # Make sure .env.example is NOT ignored if you have one
+# Keep the template — a trailing comment on this line would be read as
+# part of the pattern and silently re-ignore the file.
+!.env.example
 
 # IDE / Editor specific files
 .vscode/
